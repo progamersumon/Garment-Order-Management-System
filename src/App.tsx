@@ -85,23 +85,47 @@ export default function App() {
     fetchOrders();
   }, [activeBuyer]);
 
+  const [isSaving, setIsSaving] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+
   const fetchBuyers = async () => {
+    if (!supabase) {
+      console.error('Supabase client not initialized');
+      return;
+    }
     const { data, error } = await supabase.from('buyers').select('*');
     if (error) {
       console.error('Error fetching buyers:', error);
       return;
     }
-    setBuyers(data.map((b: any) => b.name));
+    
+    if (data && data.length === 0) {
+      // Seed initial buyers if table is empty
+      const initialBuyers = ["H&M", "Mango", "Stradivarius", "Jules", "Benetton", "GDM", "Zara"];
+      const { error: seedError } = await supabase.from('buyers').insert(initialBuyers.map(name => ({ name })));
+      if (!seedError) {
+        setBuyers(initialBuyers);
+      } else {
+        console.error('Seeding failed:', seedError);
+      }
+    } else if (data) {
+      setBuyers(data.map((b: any) => b.name));
+    }
   };
 
   const addBuyer = async () => {
     if (!newBuyerName.trim()) return;
+    if (!supabase) {
+      alert('Supabase is not configured. Please set your environment variables.');
+      return;
+    }
     const { error } = await supabase.from('buyers').insert([{ name: newBuyerName.trim() }]);
     if (!error) {
       setNewBuyerName("");
       fetchBuyers();
     } else {
       console.error('Error adding buyer:', error);
+      alert('Error adding buyer: ' + error.message);
     }
   };
 
@@ -111,12 +135,14 @@ export default function App() {
 
   const confirmDeleteBuyer = async () => {
     if (buyerToDelete) {
+      if (!supabase) return;
       const { error } = await supabase.from('buyers').delete().eq('name', buyerToDelete);
       if (!error) {
         if (activeBuyer === buyerToDelete) setActiveBuyer("Dashboard");
         fetchBuyers();
       } else {
         console.error('Error deleting buyer:', error);
+        alert('Error deleting buyer: ' + error.message);
       }
       setBuyerToDelete(null);
     }
@@ -125,6 +151,7 @@ export default function App() {
   const allTabs = ["Dashboard", "Buyers", ...buyers];
 
   const fetchOrders = async () => {
+    if (!supabase) return;
     let query = supabase.from('orders').select('*');
     if (activeBuyer !== "Buyers" && activeBuyer !== "Dashboard") {
       query = query.eq('buyer', activeBuyer);
@@ -134,96 +161,185 @@ export default function App() {
       console.error('Error fetching orders:', error);
       return;
     }
-    setOrders(data || []);
+    // Map lowercase DB columns back to camelCase state
+    const mappedOrders = (data || []).map((o: any) => ({
+      id: o.id,
+      contractNo: o.contractno,
+      poNo: o.pono,
+      item: o.item,
+      buyer: o.buyer,
+      styleName: o.stylename,
+      color: o.color,
+      season: o.season,
+      orderQty: o.orderqty,
+      washPricePcs: o.washpricepcs,
+      washPriceDoz: o.washpricedoz,
+      bp: o.bp,
+      wo: o.wo,
+      shipmentDate: o.shipmentdate
+    }));
+    setOrders(mappedOrders);
   };
 
   const fetchWashPrices = async () => {
+    if (!supabase) return;
     const { data, error } = await supabase.from('wash_prices').select('*').order('id', { ascending: false });
     if (error) {
       console.error('Error fetching wash prices:', error);
       return;
     }
-    setWashPrices(data || []);
+    // Map lowercase DB columns back to camelCase state
+    const mappedPrices = (data || []).map((p: any) => ({
+      id: p.id,
+      buyer: p.buyer,
+      description: p.description,
+      styleName: p.stylename,
+      color: p.color,
+      season: p.season,
+      washPricePcs: p.washpricepcs,
+      washPriceDoz: p.washpricedoz
+    }));
+    setWashPrices(mappedPrices);
   };
 
   const handlePaste = async () => {
     if (!pastedData.trim()) return;
-
-    const rows = pastedData.trim().split('\n');
-    const newOrders: Partial<Order>[] = rows.map(row => {
-      const cols = row.split('\t');
-      return {
-        contractNo: cols[0] || '',
-        poNo: cols[1] || '',
-        item: cols[2] || '',
-        buyer: cols[3] || buyers[0] || '',
-        styleName: cols[4] || '',
-        color: cols[5] || '',
-        season: cols[6] || '',
-        orderQty: parseInt(cols[7]?.replace(/,/g, '')) || 0,
-        washPricePcs: parseFloat(cols[8]?.replace('$', '')) || 0,
-        washPriceDoz: parseFloat(cols[9]?.replace('$', '')) || 0,
-        bp: cols[10] || '',
-        wo: cols[11] || '',
-        shipmentDate: normalizeDate(cols[12]),
-      };
-    });
-
-    const { error } = await supabase.from('orders').insert(newOrders);
-    if (error) {
-      console.error('Error pasting orders:', error);
+    if (!supabase) {
+      alert('Supabase is not configured. Please check Secrets.');
+      return;
     }
 
-    setIsPasting(false);
-    setPastedData('');
-    fetchOrders();
+    setIsImporting(true);
+    try {
+      const rows = pastedData.trim().split('\n');
+      const newOrders: any[] = rows.map(row => {
+        const cols = row.split('\t');
+        if (cols.length < 2) return null;
+        return {
+          contractno: cols[0] || '',
+          pono: cols[1] || '',
+          item: cols[2] || '',
+          buyer: cols[3] || buyers[0] || '',
+          stylename: cols[4] || '',
+          color: cols[5] || '',
+          season: cols[6] || '',
+          orderqty: parseInt(cols[7]?.replace(/,/g, '')) || 0,
+          washpricepcs: parseFloat(cols[8]?.replace('$', '')) || 0,
+          washpricedoz: parseFloat(cols[9]?.replace('$', '')) || 0,
+          bp: cols[10] || '',
+          wo: cols[11] || '',
+          shipmentdate: normalizeDate(cols[12]),
+        };
+      }).filter(Boolean);
+
+      if (newOrders.length === 0) {
+        alert('No valid data found to import.');
+        setIsImporting(false);
+        return;
+      }
+
+      const { error } = await supabase.from('orders').insert(newOrders);
+      if (error) throw error;
+
+      setIsPasting(false);
+      setPastedData('');
+      fetchOrders();
+      alert('Data imported successfully!');
+    } catch (error: any) {
+      console.error('Error pasting orders:', error);
+      alert('Import failed: ' + (error.message || 'Unknown error. Check if table "orders" exists and RLS policy is set.'));
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handlePasteWashPrice = async () => {
     if (!pastedWashPriceData.trim()) return;
-
-    const rows = pastedWashPriceData.trim().split('\n');
-    const newPrices: Partial<WashPrice>[] = rows.map(row => {
-      const cols = row.split('\t');
-      const pcs = parseFloat(cols[5]?.replace('$', '')) || 0;
-      return {
-        description: cols[0] || '',
-        buyer: cols[1] || buyers[0] || '',
-        styleName: cols[2] || '',
-        color: cols[3] || '',
-        season: cols[4] || '',
-        washPricePcs: pcs,
-        washPriceDoz: pcs * 12,
-      };
-    });
-
-    const { error } = await supabase.from('wash_prices').insert(newPrices);
-    if (error) {
-      console.error('Error pasting wash prices:', error);
+    if (!supabase) {
+      alert('Supabase is not configured.');
+      return;
     }
 
-    setIsPastingWashPrice(false);
-    setPastedWashPriceData('');
-    fetchWashPrices();
+    setIsImporting(true);
+    try {
+      const rows = pastedWashPriceData.trim().split('\n');
+      const newPrices: any[] = rows.map(row => {
+        const cols = row.split('\t');
+        if (cols.length < 2) return null;
+        const pcs = parseFloat(cols[5]?.replace('$', '')) || 0;
+        return {
+          description: cols[0] || '',
+          buyer: cols[1] || buyers[0] || '',
+          stylename: cols[2] || '',
+          color: cols[3] || '',
+          season: cols[4] || '',
+          washpricepcs: pcs,
+          washpricedoz: pcs * 12,
+        };
+      }).filter(Boolean);
+
+      if (newPrices.length === 0) {
+        alert('No valid data found.');
+        setIsImporting(false);
+        return;
+      }
+
+      const { error } = await supabase.from('wash_prices').insert(newPrices);
+      if (error) throw error;
+
+      setIsPastingWashPrice(false);
+      setPastedWashPriceData('');
+      fetchWashPrices();
+      alert('Wash prices imported successfully!');
+    } catch (error: any) {
+      console.error('Error pasting wash prices:', error);
+      alert('Import failed: ' + (error.message || 'Unknown error. Check table "wash_prices".'));
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handleAddOrder = async (e: FormEvent) => {
     e.preventDefault();
-    const orderToSave = {
-      ...newOrder,
-      washPriceDoz: (newOrder.washPricePcs || 0) * 12
-    };
-
-    let error;
-    if (editingId) {
-      const { error: err } = await supabase.from('orders').update(orderToSave).eq('id', editingId);
-      error = err;
-    } else {
-      const { error: err } = await supabase.from('orders').insert([orderToSave]);
-      error = err;
+    if (!supabase) {
+      alert('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Secrets.');
+      return;
     }
 
-    if (!error) {
+    if (!newOrder.buyer) {
+      alert('Please select a Buyer.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const orderToSave = {
+        contractno: newOrder.contractNo || '',
+        pono: newOrder.poNo || '',
+        item: newOrder.item || '',
+        buyer: newOrder.buyer || '',
+        stylename: newOrder.styleName || '',
+        color: newOrder.color || '',
+        season: newOrder.season || '',
+        orderqty: Number(newOrder.orderQty) || 0,
+        washpricepcs: Number(newOrder.washPricePcs) || 0,
+        washpricedoz: (Number(newOrder.washPricePcs) || 0) * 12,
+        bp: newOrder.bp || '',
+        wo: newOrder.wo || '',
+        shipmentdate: newOrder.shipmentDate || new Date().toISOString().split('T')[0],
+      };
+
+      let error;
+      if (editingId) {
+        const { error: err } = await supabase.from('orders').update(orderToSave).eq('id', editingId);
+        error = err;
+      } else {
+        const { error: err } = await supabase.from('orders').insert([orderToSave]);
+        error = err;
+      }
+
+      if (error) throw error;
+
       setIsAdding(false);
       setEditingId(null);
       fetchOrders();
@@ -231,7 +347,7 @@ export default function App() {
         contractNo: '',
         poNo: '',
         item: '',
-        buyer: activeBuyer === "Buyers" ? 'H&M' : activeBuyer,
+        buyer: activeBuyer === "Buyers" || activeBuyer === "Dashboard" ? (buyers[0] || '') : activeBuyer,
         styleName: '',
         color: '',
         season: '',
@@ -242,23 +358,49 @@ export default function App() {
         wo: '',
         shipmentDate: new Date().toISOString().split('T')[0],
       });
-    } else {
+    } catch (error: any) {
       console.error('Error saving order:', error);
+      alert('Save failed: ' + (error.message || 'Unknown error. Check your table schema and RLS policies.'));
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleAddWashPrice = async (e: FormEvent) => {
     e.preventDefault();
-    let error;
-    if (editingWashPriceId) {
-      const { error: err } = await supabase.from('wash_prices').update(newWashPrice).eq('id', editingWashPriceId);
-      error = err;
-    } else {
-      const { error: err } = await supabase.from('wash_prices').insert([newWashPrice]);
-      error = err;
+    if (!supabase) {
+      alert('Supabase is not configured.');
+      return;
     }
 
-    if (!error) {
+    if (!newWashPrice.buyer) {
+      alert('Please select a Buyer.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const priceToSave = {
+        buyer: newWashPrice.buyer || '',
+        description: newWashPrice.description || '',
+        stylename: newWashPrice.styleName || '',
+        color: newWashPrice.color || '',
+        season: newWashPrice.season || '',
+        washpricepcs: Number(newWashPrice.washPricePcs) || 0,
+        washpricedoz: Number(newWashPrice.washPriceDoz) || 0,
+      };
+
+      let error;
+      if (editingWashPriceId) {
+        const { error: err } = await supabase.from('wash_prices').update(priceToSave).eq('id', editingWashPriceId);
+        error = err;
+      } else {
+        const { error: err } = await supabase.from('wash_prices').insert([priceToSave]);
+        error = err;
+      }
+
+      if (error) throw error;
+
       setIsAddingWashPrice(false);
       setEditingWashPriceId(null);
       setNewWashPrice({
@@ -271,8 +413,11 @@ export default function App() {
         washPriceDoz: 0,
       });
       fetchWashPrices();
-    } else {
+    } catch (error: any) {
       console.error('Error saving wash price:', error);
+      alert('Save failed: ' + (error.message || 'Unknown error.'));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1310,9 +1455,10 @@ export default function App() {
                   </button>
                   <button
                     onClick={handlePasteWashPrice}
-                    className="px-6 py-2 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 shadow-sm"
+                    disabled={isImporting}
+                    className="px-6 py-2 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 shadow-sm disabled:opacity-50"
                   >
-                    Import Data
+                    {isImporting ? "Importing..." : "Import Data"}
                   </button>
                 </div>
               </div>
@@ -1412,12 +1558,13 @@ export default function App() {
                     >
                       Cancel
                     </button>
-                    <button
-                      type="submit"
-                      className="px-6 py-1 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 shadow-sm"
-                    >
-                      Save Entry
-                    </button>
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="px-6 py-1 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 shadow-sm disabled:opacity-50"
+                  >
+                    {isSaving ? "Saving..." : (editingWashPriceId ? 'Update Price' : 'Save Price')}
+                  </button>
                   </div>
                 </form>
               </div>
@@ -1535,9 +1682,10 @@ export default function App() {
                   </button>
                   <button
                     onClick={handlePaste}
-                    className="px-6 py-2 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 shadow-sm"
+                    disabled={isImporting}
+                    className="px-6 py-2 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 shadow-sm disabled:opacity-50"
                   >
-                    Import Data
+                    {isImporting ? "Importing..." : "Import Data"}
                   </button>
                 </div>
               </div>
@@ -1690,9 +1838,10 @@ export default function App() {
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-1 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 shadow-sm"
+                    disabled={isSaving}
+                    className="px-6 py-1 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 shadow-sm disabled:opacity-50"
                   >
-                    {editingId ? 'Update Entry' : 'Save Entry'}
+                    {isSaving ? "Saving..." : (editingId ? 'Update Entry' : 'Save Entry')}
                   </button>
                 </div>
               </form>
