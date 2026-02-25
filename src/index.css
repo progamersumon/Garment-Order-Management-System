@@ -1,0 +1,37 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-[#f8f9fa] text-[#141414] font-sans;
+  }
+}
+
+.data-table-header {
+  @apply bg-[#95b3d7] text-[#141414] font-semibold text-xs border border-gray-400 p-2 text-center;
+}
+
+.data-table-cell {
+  @apply border border-gray-300 p-1 text-xs text-center;
+}
+
+.data-table-row-even {
+  @apply bg-white;
+}
+
+.data-table-row-odd {
+  @apply bg-[#fde9d9];
+}
+
+.nav-tab {
+  @apply px-3 py-2 border-r border-gray-300 font-bold text-sm cursor-pointer transition-colors hover:bg-gray-100;
+}
+
+.nav-tab.active {
+  @apply bg-white border-b-2 border-b-blue-500;
+}

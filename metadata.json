@@ -1,0 +1,5 @@
+{
+  "name": "Garment Order Management System",
+  "description": "A professional data entry application for managing garment manufacturing orders, featuring buyer-specific filtering and automated price calculations.",
+  "requestFramePermissions": []
+}
