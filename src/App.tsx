@@ -25,6 +25,8 @@ export default function App() {
   const [deletingWashPriceId, setDeletingWashPriceId] = useState<number | null>(null);
   const [buyerToDelete, setBuyerToDelete] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
+  const [isUpdateMode, setIsUpdateMode] = useState(false);
+  const [updateKeyField, setUpdateKeyField] = useState<'contractno' | 'pono'>('pono');
   const [isPastingWashPrice, setIsPastingWashPrice] = useState(false);
   const [pastedData, setPastedData] = useState('');
   const [pastedWashPriceData, setPastedWashPriceData] = useState('');
@@ -50,8 +52,6 @@ export default function App() {
     orderQty: 0,
     washPricePcs: 0,
     washPriceDoz: 0,
-    bp: '',
-    wo: '',
     shipmentDate: new Date().toISOString().split('T')[0],
   });
   const [newWashPrice, setNewWashPrice] = useState<Partial<WashPrice>>({
@@ -174,8 +174,6 @@ export default function App() {
       orderQty: o.orderqty,
       washPricePcs: o.washpricepcs,
       washPriceDoz: o.washpricedoz,
-      bp: o.bp,
-      wo: o.wo,
       shipmentDate: o.shipmentdate
     }));
     setOrders(mappedOrders);
@@ -183,7 +181,7 @@ export default function App() {
 
   const fetchWashPrices = async () => {
     if (!supabase) return;
-    const { data, error } = await supabase.from('wash_prices').select('*').order('id', { ascending: false });
+    const { data, error } = await supabase.from('wash_prices').select('*').order('stylename', { ascending: true });
     if (error) {
       console.error('Error fetching wash prices:', error);
       return;
@@ -226,9 +224,7 @@ export default function App() {
           orderqty: parseInt(cols[7]?.replace(/,/g, '')) || 0,
           washpricepcs: parseFloat(cols[8]?.replace('$', '')) || 0,
           washpricedoz: parseFloat(cols[9]?.replace('$', '')) || 0,
-          bp: cols[10] || '',
-          wo: cols[11] || '',
-          shipmentdate: normalizeDate(cols[12]),
+          shipmentdate: normalizeDate(cols[10]),
         };
       }).filter(Boolean);
 
@@ -238,13 +234,46 @@ export default function App() {
         return;
       }
 
-      const { error } = await supabase.from('orders').insert(newOrders);
-      if (error) throw error;
+      if (isUpdateMode) {
+        let updatedCount = 0;
+        let insertedCount = 0;
+
+        for (const order of newOrders) {
+          const keyValue = order[updateKeyField];
+          if (!keyValue) continue;
+
+          // Check if record exists
+          const { data: existing } = await supabase
+            .from('orders')
+            .select('id')
+            .eq(updateKeyField, keyValue)
+            .maybeSingle();
+
+          if (existing) {
+            const { error: updateError } = await supabase
+              .from('orders')
+              .update(order)
+              .eq('id', existing.id);
+            if (updateError) throw updateError;
+            updatedCount++;
+          } else {
+            const { error: insertError } = await supabase
+              .from('orders')
+              .insert([order]);
+            if (insertError) throw insertError;
+            insertedCount++;
+          }
+        }
+        alert(`Process complete: ${updatedCount} updated, ${insertedCount} inserted.`);
+      } else {
+        const { error } = await supabase.from('orders').insert(newOrders);
+        if (error) throw error;
+        alert('Data imported successfully!');
+      }
 
       setIsPasting(false);
       setPastedData('');
       fetchOrders();
-      alert('Data imported successfully!');
     } catch (error: any) {
       console.error('Error pasting orders:', error);
       alert('Import failed: ' + (error.message || 'Unknown error. Check if table "orders" exists and RLS policy is set.'));
@@ -324,8 +353,6 @@ export default function App() {
         orderqty: Number(newOrder.orderQty) || 0,
         washpricepcs: Number(newOrder.washPricePcs) || 0,
         washpricedoz: (Number(newOrder.washPricePcs) || 0) * 12,
-        bp: newOrder.bp || '',
-        wo: newOrder.wo || '',
         shipmentdate: newOrder.shipmentDate || new Date().toISOString().split('T')[0],
       };
 
@@ -354,8 +381,6 @@ export default function App() {
         orderQty: 0,
         washPricePcs: 0,
         washPriceDoz: 0,
-        bp: '',
-        wo: '',
         shipmentDate: new Date().toISOString().split('T')[0],
       });
     } catch (error: any) {
@@ -488,6 +513,23 @@ export default function App() {
     );
   };
 
+  const toggleSelectAllOrders = () => {
+    if (selectedOrderIds.length === filteredOrders.length && filteredOrders.length > 0) {
+      setSelectedOrderIds([]);
+    } else {
+      setSelectedOrderIds(filteredOrders.map(o => o.id!));
+    }
+  };
+
+  const toggleSelectAllWashPrices = () => {
+    const visiblePrices = washPrices.filter(p => washPriceSeasonFilter === "All" || p.season === washPriceSeasonFilter);
+    if (selectedWashPriceIds.length === visiblePrices.length && visiblePrices.length > 0) {
+      setSelectedWashPriceIds([]);
+    } else {
+      setSelectedWashPriceIds(visiblePrices.map(p => p.id!));
+    }
+  };
+
   const handleAdminClick = () => {
     if (role === 'admin') return;
     setIsAdminPasswordModalOpen(true);
@@ -530,7 +572,7 @@ export default function App() {
 
   const exportToPDF = () => {
     const doc = new jsPDF('landscape');
-    const tableColumn = ["Contract No", "PO No", "Item", "Buyer", "Style Name", "Color", "Season", "Order Qty", "Price (Pcs)", "Price (Doz)", "BP", "WO", "Shipment Date"];
+    const tableColumn = ["Contract No", "PO No", "Item", "Buyer", "Style Name", "Color", "Season", "Order Qty", "Price (Pcs)", "Price (Doz)", "Shipment Date"];
     const tableRows: any[] = [];
 
     filteredOrders.forEach(order => {
@@ -545,8 +587,6 @@ export default function App() {
         order.orderQty.toLocaleString(),
         `$${order.washPricePcs.toFixed(2)}`,
         `$${order.washPriceDoz.toFixed(2)}`,
-        order.bp,
-        order.wo,
         formatDate(order.shipmentDate)
       ];
       tableRows.push(orderData);
@@ -578,7 +618,7 @@ export default function App() {
   };
 
   const exportToExcel = () => {
-    const headers = ["Contract No", "PO No", "Item", "Buyer", "Style Name", "Color", "Season", "Order Qty", "Price (Pcs)", "Price (Doz)", "BP", "WO", "Shipment Date"];
+    const headers = ["Contract No", "PO No", "Item", "Buyer", "Style Name", "Color", "Season", "Order Qty", "Price (Pcs)", "Price (Doz)", "Shipment Date"];
     const rows = filteredOrders.map(order => [
       order.contractNo,
       order.poNo,
@@ -590,8 +630,6 @@ export default function App() {
       order.orderQty,
       order.washPricePcs,
       order.washPriceDoz,
-      order.bp,
-      order.wo,
       formatDate(order.shipmentDate)
     ]);
 
@@ -969,7 +1007,17 @@ export default function App() {
                             <th className="data-table-header text-right">Price doz</th>
                             {role === 'admin' && (
                               <th className="data-table-header w-20">
-                                {isWashPriceSelectionMode ? 'Select' : 'Actions'}
+                                {isWashPriceSelectionMode ? (
+                                  <div className="flex items-center justify-center gap-1">
+                                    <input 
+                                      type="checkbox" 
+                                      className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                                      checked={selectedWashPriceIds.length === washPrices.filter(p => washPriceSeasonFilter === "All" || p.season === washPriceSeasonFilter).length && washPrices.filter(p => washPriceSeasonFilter === "All" || p.season === washPriceSeasonFilter).length > 0}
+                                      onChange={toggleSelectAllWashPrices}
+                                    />
+                                    <span className="text-[10px]">All</span>
+                                  </div>
+                                ) : 'Actions'}
                               </th>
                             )}
                           </tr>
@@ -977,7 +1025,6 @@ export default function App() {
                         <tbody>
                           {washPrices
                             .filter(p => washPriceSeasonFilter === "All" || p.season === washPriceSeasonFilter)
-                            .slice(0, 15)
                             .map((price, idx) => (
                             <tr key={price.id || idx} className="bg-white hover:bg-gray-50 transition-colors">
                               <td className="data-table-cell font-mono">{idx + 1}</td>
@@ -1027,11 +1074,6 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
-                    {washPrices.filter(p => washPriceSeasonFilter === "All" || p.season === washPriceSeasonFilter).length > 15 && (
-                      <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 text-[10px] text-gray-500 text-center">
-                        Showing latest 15 entries.
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -1152,12 +1194,20 @@ export default function App() {
                     <th className="data-table-header">Order Qty</th>
                     <th className="data-table-header">Price pcs</th>
                     <th className="data-table-header">Price doz</th>
-                    <th className="data-table-header">B/P</th>
-                    <th className="data-table-header">W/O</th>
                     <th className="data-table-header">Shipment Date</th>
                     {role === 'admin' && (
                       <th className="data-table-header">
-                        {isOrderSelectionMode ? 'Select' : 'Action'}
+                        {isOrderSelectionMode ? (
+                          <div className="flex items-center justify-center gap-1">
+                            <input 
+                              type="checkbox" 
+                              className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                              checked={selectedOrderIds.length === filteredOrders.length && filteredOrders.length > 0}
+                              onChange={toggleSelectAllOrders}
+                            />
+                            <span className="text-[10px]">All</span>
+                          </div>
+                        ) : 'Action'}
                       </th>
                     )}
                   </tr>
@@ -1192,8 +1242,6 @@ export default function App() {
                             <span>{order.washPriceDoz.toFixed(2)}</span>
                           </div>
                         </td>
-                        <td className="data-table-cell">{order.bp}</td>
-                        <td className="data-table-cell">{order.wo}</td>
                         <td className="data-table-cell">{formatDate(order.shipmentDate)}</td>
                         {role === 'admin' && (
                           <td className="data-table-cell">
@@ -1231,7 +1279,7 @@ export default function App() {
                   <tr className="bg-gray-400 font-bold text-gray-900">
                     <td colSpan={7} className="border border-gray-500 p-1 text-center">Total</td>
                     <td className="border border-gray-500 p-1 text-center">{totalQty.toLocaleString()}</td>
-                    <td colSpan={role === 'admin' ? 6 : 5} className="border border-gray-500 p-1"></td>
+                    <td colSpan={role === 'admin' ? 4 : 3} className="border border-gray-500 p-1"></td>
                   </tr>
                 </tbody>
               </table>
@@ -1664,7 +1712,7 @@ export default function App() {
                   Copy rows from Excel and paste them below. Ensure the columns match the table structure:
                   <br />
                   <span className="text-[10px] font-mono bg-gray-100 p-1 block mt-2">
-                    Contract No | PO No | Item | Buyer | Style | Color | Season | Qty | Price Pcs | Price Doz | B/P | W/O | Date
+                    Contract No | PO No | Item | Buyer | Style | Color | Season | Qty | Price Pcs | Price Doz | Date
                   </span>
                 </p>
                 <textarea
@@ -1673,20 +1721,50 @@ export default function App() {
                   value={pastedData}
                   onChange={(e) => setPastedData(e.target.value)}
                 />
-                <div className="flex justify-end gap-3">
-                  <button
-                    onClick={() => setIsPasting(false)}
-                    className="px-6 py-2 border border-gray-300 rounded text-sm font-medium hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handlePaste}
-                    disabled={isImporting}
-                    className="px-6 py-2 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 shadow-sm disabled:opacity-50"
-                  >
-                    {isImporting ? "Importing..." : "Import Data"}
-                  </button>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${isUpdateMode ? 'bg-emerald-600 border-emerald-600' : 'bg-white border-gray-300 group-hover:border-emerald-500'}`}>
+                        <input
+                          type="checkbox"
+                          className="hidden"
+                          checked={isUpdateMode}
+                          onChange={(e) => setIsUpdateMode(e.target.checked)}
+                        />
+                        {isUpdateMode && <X size={14} className="text-white rotate-45" />}
+                      </div>
+                      <span className="text-sm font-bold text-gray-700">Update Existing Records</span>
+                    </label>
+                    
+                    {isUpdateMode && (
+                      <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+                        <span className="text-xs text-gray-500 font-medium">Match by:</span>
+                        <select
+                          value={updateKeyField}
+                          onChange={(e) => setUpdateKeyField(e.target.value as 'contractno' | 'pono')}
+                          className="text-xs border border-gray-300 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-emerald-500 bg-white font-bold text-emerald-700"
+                        >
+                          <option value="pono">PO No</option>
+                          <option value="contractno">Contract No</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setIsPasting(false)}
+                      className="px-6 py-2 border border-gray-300 rounded text-sm font-medium hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handlePaste}
+                      disabled={isImporting}
+                      className="px-6 py-2 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 shadow-sm disabled:opacity-50"
+                    >
+                      {isImporting ? "Importing..." : "Import Data"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </motion.div>
@@ -1800,22 +1878,6 @@ export default function App() {
                     className="w-full border border-gray-300 rounded px-3 py-1 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                     value={newOrder.washPriceDoz || 0}
                     onChange={e => setNewOrder({ ...newOrder, washPriceDoz: parseFloat(e.target.value) || 0 })}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-600 uppercase">B/P</label>
-                  <input
-                    className="w-full border border-gray-300 rounded px-3 py-1 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={newOrder.bp || ''}
-                    onChange={e => setNewOrder({ ...newOrder, bp: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-600 uppercase">W/O</label>
-                  <input
-                    className="w-full border border-gray-300 rounded px-3 py-1 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={newOrder.wo || ''}
-                    onChange={e => setNewOrder({ ...newOrder, wo: e.target.value })}
                   />
                 </div>
                 <div className="space-y-1">

@@ -10,8 +10,6 @@ export interface Order {
   orderQty: number;
   washPricePcs: number;
   washPriceDoz: number;
-  bp: string;
-  wo: string;
   shipmentDate: string;
 }
 
